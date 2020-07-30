@@ -373,11 +373,11 @@ def sens_func( wav, cnt, exp, seeing, sw, airmass, extfile, stdfile, wave_range,
     # Sensitivity function
     # --------------------
     if not os.path.exists( os.path.join( os.getcwd(), stdfile ) ):
-        if not os.path.exists( os.path.join( os.path.split( os.path.realpath( __file__ ) )[0], 'lib/onedstds/', stdfile ) ):
+        if not os.path.exists( os.path.join( os.path.split( os.path.realpath( __file__ ) )[0], 'onedstds/', stdfile ) ):
             raise FileNotFoundError( 'No standard file found.' )
             sys.exit()
         else:
-            stdfile = os.path.join( os.path.split( os.path.realpath( __file__ ) )[0], 'lib/onedstds/', stdfile )
+            stdfile = os.path.join( os.path.split( os.path.realpath( __file__ ) )[0], 'onedstds/', stdfile )
     else:
         stdfile = os.path.join( os.getcwd(), stdfile )
     # 1. Load standard spectrum

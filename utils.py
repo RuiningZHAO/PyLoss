@@ -190,15 +190,16 @@ def plot2d( img, title, slit_along, show = 1, save = 1 ):
     cb.ax.tick_params( which = 'major', direction = 'in', color = 'w', right = True, length = 7, width = 1.5, labelsize = 18 )
     cb.ax.set_ylabel( 'ADU', fontsize = 22 )
 
+    if show:
+        print( '[Plotting] Show plot' )
+        plt.show()
+
     if save:
         fig_path = 'figs'
         if not os.path.exists( fig_path ): os.makedirs( fig_path )
         print( F'[Plotting] Save to { os.path.join( fig_path, F"{title}.png".replace( " ", "_" ) ) }' )
         plt.savefig( os.path.join( fig_path, F'{title}.png'.replace( ' ', '_' ) ), dpi = 144 )
 
-    if show:
-        print( '[Plotting] Show plot' )
-        plt.show()
     plt.close()
 
     return None
