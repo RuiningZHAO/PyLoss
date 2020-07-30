@@ -1,0 +1,498 @@
+import numpy as np
+from prettytable import PrettyTable
+from prettytable import HEADER, NONE
+# from prettytable import PLAIN_COLUMN
+from llc import jit_filter_function
+
+def biascmb( instrument, work_path, blist, transpose, row_range, col_range ):
+
+    '''
+    A function to obtain combined bias.
+
+    Parameters
+    ----------
+    instrument : string
+        The instrument used to take spectra.
+    work_path : string
+        Path to the workspace.
+    blist : array_like
+        List of bias files.
+    transpose : bool
+        If True, the image will be transposed before trimming.
+    row_range : array_like
+        Row range.
+    col_range : array_like
+        Column range.
+
+    Returns
+    -------
+    bias : 2-D array
+        Mean bias.
+    '''
+
+    import os
+    import numpy as np
+    from utils import load_image, trim
+
+    # Load bias
+    # ---------
+    bias = np.zeros( ( len(blist), (row_range[1] - row_range[0]), (col_range[1] - col_range[0]) ) )
+    for i, b in enumerate(blist):
+        print( F'\r[Bias Combination] Loading {i+1} of {len(blist)} bias files', end = '', flush = True )
+        data, hdr = load_image( instrument, os.path.join( work_path, F'raw/{b}' ) )
+        if transpose:
+            data = data.T
+        bias[i] = trim( data, row_range, col_range )
+    # Print statistics
+    tab = PrettyTable( hrules = HEADER, vrules = NONE )
+    tab.field_names = [ 'FILE NAME', 'SHAPE', 'MEAN', 'STDDEV', 'MIN', 'MAX' ]
+    for bname, b in zip( blist, bias ):
+        tab.add_row([ bname, b.shape, round( b.mean(), 2 ), round( b.std(ddof=1), 2 ), b.min(), b.max() ])
+    print( '\n\n' + tab.get_string() + '\n' )
+
+    # Combine
+    # -------
+    print( '[Bias Combination] Combining' )
+    bias = np.median( bias, axis = 0 )
+    # Print statistics
+    tab = PrettyTable( hrules = HEADER, vrules = NONE )
+    tab.field_names = [ 'SHAPE', 'MEAN', 'STDDEV', 'MIN', 'MAX' ]
+    tab.add_row([ bias.shape, round( bias.mean(), 2 ), round( bias.std(ddof=1), 2 ), round( bias.min(), 2 ), round( bias.max(), 2 ) ])
+    print( '\n' + tab.get_string() + '\n' )
+
+    # Writing to file
+    # ---------------
+    print( '[Bias Combination] Writing to Zero.fits\n\n' )
+    print( type( hdr ) )
+
+    return bias
+
+def flatcmb( instrument, work_path, flist, transpose, row_range, col_range, bias ):
+
+    '''
+    A function to obtain combined flatfield.
+
+    Parameters
+    ----------
+    instrument : string
+        The instrument used to take spectra.
+    work_path : string
+        Path to the workspace.
+    flist : array_like
+        List of flatfield files.
+    transpose : bool
+        If True, the image will be transposed before trimming.
+    row_range : array_like
+        Row range.
+    col_range : array_like
+        Column range.
+    bias : 2-D array
+        Combined bias which will be substracted from the flatfield.
+
+    Returns
+    -------
+    flat : 2-D array
+        Mean flatfield.
+    '''
+
+    import os
+    import numpy as np
+    from utils import load_image, trim
+
+    # Load flat
+    # ---------
+    flat = np.zeros( (len(flist), bias.shape[0], bias.shape[1]) )
+    for i, f in enumerate(flist):
+        print( F'\r[Flatfield Combination] Loading {i+1} of {len(flist)} flatfield files', end = '', flush = True )
+        data = load_image( instrument, os.path.join( work_path, F'raw/{f}' ) )
+        if transpose:
+            data = data.T
+        flat[i] = trim( data, row_range, col_range ) - bias
+    # Print statistics
+    tab = PrettyTable( hrules = HEADER, vrules = NONE )
+    tab.field_names = [ 'FILE NAME', 'SHAPE', 'MEAN', 'STDDEV', 'MIN', 'MAX' ]
+    for fname, f in zip( flist, flat ):
+        tab.add_row([ fname, f.shape, round( f.mean(), 2 ), round( f.std(ddof=1), 2 ), f.min(), f.max() ])
+    print( '\n\n' + tab.get_string() + '\n' )
+
+    # Combine
+    # -------
+    print( '[Flatfield Combination] Combining' )
+    # Average sigma clip
+    mean = np.mean( flat, axis = 0 )
+    sigm = np.std( flat, axis = 0, ddof = 1 )
+    mask = np.abs( flat - mean ) > 3 * sigm
+    flat = np.ma.array( flat, mask = mask ).mean( axis = 0 )
+    # Print statistics
+    tab = PrettyTable( hrules = HEADER, vrules = NONE )
+    tab.field_names = [ 'SHAPE', 'MEAN', 'STDDEV', 'MIN', 'MAX' ]
+    tab.add_row([ flat.shape, round( flat.mean(), 2 ), round( flat.std(ddof=1), 2 ), round( flat.min(), 2 ), round( flat.max(), 2 ) ])
+    print( '\n' + tab.get_string() + '\n' )
+
+    print( '[Flatfield Combination] Done\n\n' )
+
+    return flat
+
+def flatnorm( flat, sigma = (20, 20) ):
+    '''
+    A function to normalize flatfield.
+
+    Parameters
+    ----------
+    flat : 2-D array
+        The flat to be normalized.
+    sigma : array_like
+        sigma used in smoothing.
+
+    Returns
+    -------
+    flat_norm : 2-D array
+        Normalized flat.
+    '''
+
+    import scipy.ndimage as ndimage
+
+    print( '[Flatfield Normalization] Smoothing' )
+    flat_smth = ndimage.gaussian_filter( flat, sigma = sigma, order = 0, mode = 'mirror' )
+    flat_norm = flat / flat_smth
+
+    # Print statistics
+    # ----------------
+    tab = PrettyTable( hrules = HEADER, vrules = NONE )
+    tab.field_names = [ 'SHAPE', 'MEAN', 'STDDEV', 'MIN', 'MAX' ]
+    tab.add_row([ flat_norm.shape, round( flat_norm.mean(), 2 ), round( flat_norm.std(ddof=1), 2 ), round( flat_norm.min(), 2 ), round( flat_norm.max(), 2 ) ])
+    print( '\n' + tab.get_string() + '\n' )
+
+    print( '[Flatfield Normalization] Done\n\n' )
+
+    return flat_norm, flat_smth
+
+def imcorr( instrument, img_path, transpose, row_range, col_range, bias, flat ):
+    '''
+    A function to correct image.
+
+    Parameters
+    ----------
+    instrument : string
+        The instrument used to take spectra.
+    img_path : string
+        Path to the image.
+    transpose : bool
+        If True, the image will be transposed before trimming.
+    row_range : array_like
+        Row range.
+    col_range : array_like
+        Column range.
+    bias : 2-D array
+        Combined bias which will be substracted from the images.
+    flat : 2-D array
+        Combined flatfield which will be divided from the images.
+
+    Returns
+    -------
+    img_corr : 2-D array
+        Corrected image.
+    '''
+
+    import os
+    from utils import trim, load_image
+
+    # Load image
+    # ----------
+    data = load_image( instrument, img_path )
+    if transpose:
+        data = data.T
+    img_corr = ( trim( data, row_range, col_range ) - bias ) / flat
+
+    # import matplotlib.pyplot as plt
+
+    # fig, ax = plt.subplots( 1, 2, figsize = (8, 10) )
+    # ax[0].imshow( np.log10( trim( img - bias, row_range, col_range ) ), cmap = 'gray' )
+    # # ax[0].set_ylim( 0, img.shape[0] )
+    # ax[1].imshow( np.log10( img_corr ), cmap = 'gray' )
+    # # ax[1].set_ylim( 0, img_corr.shape[0] )
+    # plt.show()
+
+    return img_corr
+
+@jit_filter_function
+def nbstd( data ):
+    return np.std( data )
+
+def maskcr( data, times = 3 ):
+    '''
+    A function to mask cosmic ray pixels.
+
+    Parameters
+    ----------
+    data : 2-D array
+        The image with cosmic ray pixels.
+    times : integer
+        Time of iterations.
+
+    Returns
+    -------
+    data : 2-D array
+        Mean object image.
+    '''
+
+    from lacosmic import lacosmic
+
+    if data.shape[0] > 1:
+
+        dmean = data.mean( axis = 0 ); dstd = data.std( axis = 0, ddof = 1 )
+        data_mask = np.zeros([ data.shape[1], data.shape[2] ])
+        for i, d in enumerate( data ):
+            print( F'    - Image {i+1:2d}: {( np.abs( d - dmean ) > 2 * dstd ).sum():4d} pixels masked' )
+            d[ np.abs( d - dmean ) > 2 * dstd ] = dmean[ np.abs( d - dmean ) > 2 * dstd ]
+            data_mask += d
+
+        data = data_mask * 1
+            
+    elif data.shape[0] == 1:
+
+        data = data[0]
+
+        data, _ = lacosmic( data, 
+                            contrast           = 1, 
+                            cr_threshold       = 4.5, 
+                            neighbor_threshold = 0.5, 
+                            readnoise          = 4.64, 
+                            effective_gain     = 1.41 )
+
+    print( '\n' )
+
+    return data
+
+def oned_obj_spec( data, width = 7 ):
+    '''
+    A function to extract 1-D object spectrum.
+
+    Parameters
+    ----------
+    data : 2-D array
+        The image of the spectrum.
+    width : integer
+        FWHM of the spectrum in image.
+
+    Returns
+    -------
+    spec : 
+        The extracted object spectrum.
+    (w, s_smth) :
+        The center of the pixels where the spectrum locate.
+    width : 
+        FWHM of the spectrum in image.
+    '''
+
+    from scipy.signal import butter, filtfilt
+
+    # Estimate dispersion solution
+    lmaxs = data.max( axis = 1 )[:, np.newaxis]
+    w, s = np.where( data == lmaxs )
+    # Smooth dispersion solution
+    b, a = butter( 2, 0.01 )
+    s_smth = np.round( filtfilt( b, a, s, method = 'gust' ), 0 ).astype( int )
+
+    spec = np.zeros( data.shape[0] )
+    for i, row in enumerate(data):
+        idxstr = s_smth[i] - width//2
+        idxend = s_smth[i] + width//2 + 1
+        aper_obj = row[ idxstr : idxend ]
+        aper_sky = np.hstack([ row[ idxstr - 4 * width : idxstr - 3 * width ], 
+                               row[ idxend + 3 * width : idxend + 4 * width ] ])
+        sky = aper_sky[ (np.median(aper_sky) - 3 * np.std(aper_sky) < aper_sky) & 
+                        (aper_sky < np.median(aper_sky) + 3 * np.std(aper_sky)) ].mean()
+        spec[i] = aper_obj.sum() - aper_obj.shape[0] * sky
+
+    return spec
+
+def oned_arc_spec( data, w, s, width ):
+    '''
+    A function to extract 1-D arc spectrum.
+
+    Parameters
+    ----------
+    data : 2-D array
+        The image of the spectrum.
+    w : array_like
+        The center of the pixels where the spectrum locate.
+    s : array_like
+        The center of the pixels where the spectrum locate.
+    width : integer
+        FWHM of the spectrum in image.
+
+    Returns
+    -------
+    spec : 
+        The extracted arc spectrum.
+    '''
+
+    spec = np.zeros( data.shape[0] )
+    for i, row in enumerate(data):
+        idxstr = s[i] - width//2
+        idxend = s[i] + width//2 + 1
+        spec[i] = row[ idxstr : idxend ].sum()
+
+    return spec
+
+# def wavelength_calibration( inst, grating, path, alist, bias, flat_norm, xrng, yrng, w, s, width, mode ):
+
+#     import os
+#     import matplotlib.pyplot as plt
+
+#     print( F'    - Wavelength Calibration ({mode} mode )' )
+#     if mode == 'manul':
+
+#         from scipy.signal import find_peaks
+
+#         peak_idx = np.array([]); line_wave = np.array([]); arcspecs = list(); arcs = list()
+#         for farc, narc in alist:
+#             arc = imgcorr( inst, os.path.join( path, farc ), bias, flat_norm, xrng, yrng )
+#             # plot3d( arc, path, 'arc', show = 1, save = 0 )
+#             arcspec = oned_arc_spec( arc, w, s, width )
+
+#             print( F'        - Detecting {narc} arc lines' )
+#             i = 1; d = 10; p = 35000
+#             while True:
+#                 print( F'            - Trial {i:2d}: distance = {d}, prominence = {p}' )
+#                 trial_idx, _ = find_peaks( arcspec, distance = d, prominence = p )
+#                 fig, ax = plt.subplots( 1, 1, figsize = (13, 6) )
+#                 ax.plot( w, arcspec, 'k-', lw = 0.8 )
+#                 ax.plot( w[trial_idx], arcspec[trial_idx], 'rv' )
+#                 ax.set_xlim( w.min(), w.max() )
+#                 plt.show()
+#                 accept = input('                - Accept?[yes/no]: ')
+#                 if accept == 'yes':
+#                     break
+#                 else:
+#                     d, p = eval( input('                - (d, p) = ') )
+#                     i += 1
+#             peak_idx = np.hstack( [peak_idx, trial_idx] )
+#             print('        - Recognization')
+#             line_tab = input('            - Path to the line table: ')
+#             line_wave = np.hstack( [line_wave, np.loadtxt( line_tab )] )
+
+#             arcspecs.append( arcspec )
+#             arcs.append( narc )
+
+#         print('            - Fitting dispersion solution...')
+#         idx = np.isfinite( peak_idx ) & np.isfinite( line_wave )
+
+#         p = np.polyfit( peak_idx[idx], line_wave[idx], 2 )
+#         lbda = np.poly1d( p )( w )
+
+#         fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+#         ax.plot( peak_idx[idx], line_wave[idx], 'ko' )
+#         ax.plot( w, lbda, 'r-' )
+#         plt.show()
+
+#         return w, arcspecs, arcs, lbda
+
+#     elif mode == 'auto':
+
+#         w_itp = np.arange(w[0], w[-1] + 0.01, 0.01)
+#         N = np.array([]); arcspecs = list(); arcs = list()
+#         for farc, narc in alist:
+
+#             arc = imgcorr( inst, os.path.join( path, farc ), bias, flat_norm, xrng, yrng )
+#             # plot3d( arc, path, 'arc', show = 1, save = 0 )
+#             arcspec = oned_arc_spec( arc, w, s, width )
+#             adu_itp = np.interp( w_itp, w, arcspec )
+
+#             tw, tadu, tlbda = np.load( F'./lib/{inst}/{grating}/{narc}.npy' )
+
+#             N = np.hstack([ N, np.correlate( tadu, adu_itp, 'full' ).argmax() ])
+
+#             arcspecs.append( arcspec ); arcs.append( arc )
+
+#         N_mean = int( N.mean() )
+#         p = np.polyfit( w_itp[-N_mean:], tlbda[:N_mean], 2 )
+#         lbda = np.poly1d( p )( w )
+
+#         fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+#         ax.plot( w_itp[-N_mean:], tlbda[:N_mean], 'k.' )
+#         ax.plot( w, lbda, 'r-' )
+#         plt.show()
+
+#         return w, arcspecs, arcs, lbda
+            
+#     else:
+#         ValueError( 'There is no such mode.' )
+
+def Calibration( obj, std, arc ):
+
+    import numpy as np
+    from scipy.interpolate import interp1d
+    import matplotlib.pyplot as plt
+
+    # w_itp, adu_itp = np.load( './output/He+Ne.npy' )
+    # obj = np.load( './output/obj.npy' ).T
+    # std = np.load( './output/std.npy' ).T
+    # # arc = np.load( './output/Fe+Ar.npy' )
+
+    # tw, tadu, tlbda = np.load( './lib/YFOSC/G14/He+Ne.npy' )
+
+    # N = np.correlate( tadu, adu_itp[0], 'full' ).argmax()
+    # p = np.polyfit( w_itp[-N:], tlbda[:N], 2 )
+    # lbda = np.poly1d( p )( w )
+
+    objspec = oned_obj_spec( obj, width = 7 )
+    stdspec = oned_obj_spec( std, width = 7 )
+
+    plt.plot( objspec )
+    # plt.plot( stdspec )
+    plt.savefig( './tmp.png', dpi = 300 )
+    # plt.show()
+
+
+    # w_obj, arcspecs, arcs, lbda_obj = wavelength_calibration( inst, grating, path, alist, bias, flat_norm, xrng, yrng, w_obj, s_obj, width, mode )
+
+    # if mode == 'manul':
+    #     for arcspec, arc in zip(arcspecs, arcs):
+    #         w_itp = np.arange( w_obj[0], w_obj[-1] + 0.01, 0.01 )
+    #         adu_itp  = np.interp( w_itp, w_obj, arcspec )
+    #         p = np.polyfit( w_obj, lbda_obj, 2 )
+    #         lbda_itp = np.poly1d( p )( w_itp )
+    #         np.save( F'{arc}.npy', np.vstack([ w_itp, adu_itp, lbda_itp ]) )
+
+    # import matplotlib.pyplot as plt
+    # fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+    # ax.plot( lbda_obj, objspec, 'k-', lw = 0.8 )
+    # plt.show()
+
+    # std = objcmb( inst, path, slist, bias, flat_norm, xrng, yrng )
+    # # plot3d( std, path, 'std', show = 1, save = 0 )
+    # std_mask = maskcr( std, times = 10 )
+    # # plot3d( obj_mask, path, 'obj_mask', show = 1, save = 0 )
+    # stdspec, (w_std, s_std), width = oned_obj_spec( std_mask, width = 7 )
+
+    # w_std, arcspecs, arcs, lbda_std = wavelength_calibration( inst, grating, path, alist, bias, flat_norm, xrng, yrng, w_std, s_std, width, mode )
+
+    # fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+    # ax.plot( lbda_std, stdspec, 'k-', lw = 0.8 )
+    # plt.show()
+
+    # lbda, mag, _ = np.loadtxt( './lib/std/bd404032.dat' ).T; flux = 10**( -0.4 * mag )
+    # fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+    # plt.plot( lbda, flux )
+    # plt.show()
+    # flux_itp = np.interp( lbda, lbda_std, stdspec )
+
+    # from scipy.interpolate import interp1d
+    # C_std = interp1d( lbda, flux / flux_itp, 'linear', bounds_error = False, fill_value = 'extrapolate' )( lbda_std )
+    # C_obj = interp1d( lbda_std, C_std, 'linear', bounds_error = False, fill_value = 'extrapolate' )( lbda_obj )
+
+    # fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+    # ax.plot(lbda, flux / flux_itp, 'ko' )
+    # ax.plot( lbda_std, C_std, 'r-', lw = 0.8 )
+    # plt.show()
+
+    # fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+    # ax.plot( lbda_obj, C_obj, 'k-' )
+    # ax.plot( lbda_std, C_std, 'r-', lw = 0.8 )
+    # plt.show()
+
+    # fig, ax = plt.subplots( 1, 1, figsize = (10, 6) )
+    # ax.plot( lbda_obj, objspec * C_obj, 'k-', lw = 0.8 )
+    # plt.show()
