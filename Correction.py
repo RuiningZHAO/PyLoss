@@ -247,9 +247,11 @@ class Corrector( object ):
         mask = np.abs( img_norm - 1 ) > 3 * np.std( img_norm - 1, ddof = 1 )
         x = np.arange( self.imgs[0].shape[1] ); y = np.arange( self.imgs[0].shape[0] )
         X, Y = np.meshgrid( x, y )
-        self.imgs[0] = griddata( ( Y[~mask], X[~mask] ), self.imgs[0][~mask], ( Y, X ), method = 'linear' )
+        self.imgs[0] = griddata( ( Y[~mask], X[~mask] ), self.imgs[0][~mask], ( Y, X ), method = 'nearest' )
         # Smoothed Flat
         img_smth = gaussian_filter( self.imgs[0], sigma = sigma, order = 0, mode = 'mirror' )
+
+        plot2d( mask.astype(int), 'Mask', self.slit_along, show = 1, save = 1 )
 
         # Edit header
         self.hdrs[0]['BANDID1'] = F'Normalized flat - 2-D gaussian_filter, sigma = { sigma }'
