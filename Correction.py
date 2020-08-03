@@ -18,7 +18,7 @@ try:
     from scipy.signal import find_peaks
     from scipy.optimize import curve_fit
     from scipy.ndimage import gaussian_filter
-    from scipy.interpolate import interp1d, griddata
+    from scipy.interpolate import interp1d, griddata, make_lsq_spline
 except ImportError:
     print( 'Module `scipy` not found. Please install with: pip install scipy' )
     sys.exit()
@@ -172,7 +172,7 @@ class CCDDataList( object ):
             for i, img in enumerate( self.imgs ):
                 plot2d( img, F'{ title } { str(i+1).zfill(len(str(self.num))) }', self.slit_along, show, save )
         elif self.combined:
-            plot2d( self.img, title, self.slit_along, show, save )
+            plot2d( self.img, title, self.slit_along, vmin = None, show = show, save = save )
         else:
             raise RuntimeError( 'The method `combine` should be called first if `combined` is True.' )
             sys.exit()
@@ -240,16 +240,18 @@ class Corrector( object ):
 
         print( '[Image correction] Flat normalization' )
         # Smoothed Flat
+        # -------------
+        # 1. Initial smooth
         img_smth = gaussian_filter( self.imgs[0], sigma = sigma, order = 0, mode = 'mirror' )
         err_smth = gaussian_filter( self.errs[0], sigma = sigma, order = 0, mode = 'mirror' )
-        # 2-D Interpolate
+        # 2. 2-D Interpolate
         img_norm = self.imgs[0] / img_smth
         mask = np.abs( img_norm - 1 ) > 3 * np.std( img_norm - 1, ddof = 1 )
         x = np.arange( self.imgs[0].shape[1] ); y = np.arange( self.imgs[0].shape[0] )
         X, Y = np.meshgrid( x, y )
-        self.imgs[0] = griddata( ( Y[~mask], X[~mask] ), self.imgs[0][~mask], ( Y, X ), method = 'nearest' )
-        # Smoothed Flat
-        img_smth = gaussian_filter( self.imgs[0], sigma = sigma, order = 0, mode = 'mirror' )
+        img_intp = griddata( ( Y[~mask], X[~mask] ), self.imgs[0][~mask], ( Y, X ), method = 'nearest' )
+        # 3. Second smooth
+        img_smth = gaussian_filter( img_intp, sigma = sigma, order = 0, mode = 'mirror' )
 
         plot2d( mask.astype(int), 'Mask', self.slit_along, show = 1, save = 1 )
 
@@ -282,7 +284,7 @@ class Corrector( object ):
         
         return deepcopy( self.imgs ), deepcopy( self.errs ), deepcopy( self.hdrs )
 
-    def maskcr( self, method, dead_px = False ):
+    def maskcr( self, method ):
         '''
         A method to mask cosmic ray pixels.
 
@@ -306,21 +308,21 @@ class Corrector( object ):
                                             neighbor_threshold = 0.5, 
                                             readnoise          = self.rdnoise, 
                                             effective_gain     = self.gain )
-                if dead_px:
-                    print( F'\n[Removing bad pixels] Process {i+1} of { self.num } images using { method } method [Dead pixels]\n' )
-                    img = self.imgs[i]
-                    if self.slit_along == 'row': img = img.T
-                    # Mask bad pixels
-                    img_smth = gaussian_filter( img, ( 100, 0 ) )
-                    img_resi = img - img_smth
-                    mask = img_resi < -4 * np.std( img_resi, axis = 0, ddof = 1 )[np.newaxis, :]
-                    # 2-D Interpolate
-                    img = np.ma.array( img, mask = mask )
-                    x = np.arange( img.shape[1] ); y = np.arange( img.shape[0] )
-                    X, Y = np.meshgrid( x, y )
-                    img_itp = griddata( ( Y[~img.mask], X[~img.mask] ), img[~img.mask], ( Y, X ), method = 'linear' )
-                    if self.slit_along == 'row': img_itp = img_itp.T
-                    self.imgs[i] = img_itp
+#                 if dead_px:
+#                     print( F'\n[Removing bad pixels] Process {i+1} of { self.num } images using { method } method [Dead pixels]\n' )
+#                     img = self.imgs[i]
+#                     if self.slit_along == 'row': img = img.T
+#                     # Mask bad pixels
+#                     img_smth = gaussian_filter( img, ( 100, 0 ) )
+#                     img_resi = img - img_smth
+#                     mask = img_resi < -4 * np.std( img_resi, axis = 0, ddof = 1 )[np.newaxis, :]
+#                     # 2-D Interpolate
+#                     img = np.ma.array( img, mask = mask )
+#                     x = np.arange( img.shape[1] ); y = np.arange( img.shape[0] )
+#                     X, Y = np.meshgrid( x, y )
+#                     img_itp = griddata( ( Y[~img.mask], X[~img.mask] ), img[~img.mask], ( Y, X ), method = 'linear' )
+#                     if self.slit_along == 'row': img_itp = img_itp.T
+#                     self.imgs[i] = img_itp
 
                 self.hdrs[i]['COMMENT'] = 'Bad pixels removed using Laplacian Edge Detection'
                 print( '' )
@@ -413,11 +415,14 @@ class Corrector( object ):
         y = np.arange( shift_mean.shape[0] ) + 1
         mask = np.ones( shift_mean.shape[0], dtype = bool )
         for k in range( 5 ):
-            p = np.poly1d( np.polyfit( y[mask], shift_mean[mask], order ) )
-            shift_fit = p( y )
-            mask = mask & ( ~sigma_clip( shift_mean - shift_fit, sigma = 1, maxiters = 1, masked = True ).mask )
-        self.shift = shift_fit
-        
+            knots = np.r_[ ( y[mask][0], ) * ( order + 1 ), ( y[mask][-1], ) * ( order + 1 ) ]
+            spl = make_lsq_spline( y[mask], shift_mean[mask], t = knots, k = order )
+            mask = mask & ~sigma_clip( shift_mean - spl( y ), sigma = 1, maxiters = 1, masked = True ).mask
+#             p = np.poly1d( np.polyfit( y[mask], shift_mean[mask], order ) )
+#             shift_fit = p( y )
+#             mask = mask & ( ~sigma_clip( shift_mean - shift_fit, sigma = 1, maxiters = 1, masked = True ).mask )
+        self.shift = spl( y )
+
         # Write to file
         # -------------
         if not os.path.exists( 'bak' ): os.makedirs( 'bak' )
@@ -443,8 +448,8 @@ class Corrector( object ):
         ax[0].set_title( 'Zeropoint Shift Curve Fitting', fontsize = 24 )
         
         # Residuals
-        ax[1].plot( y[mask],  shift_mean[mask]  - shift_fit[mask], 'k+' )
-        ax[1].plot( y[~mask], shift_mean[~mask] - shift_fit[~mask], '+', c = 'grey' )
+        ax[1].plot( y[mask],  shift_mean[mask]  - self.shift[mask], 'k+' )
+        ax[1].plot( y[~mask], shift_mean[~mask] - self.shift[~mask], '+', c = 'grey' )
         # Settings
         ax[1].axhline( y = 0, ls = '--', c = 'yellow', lw = 2 )
         ax[1].set_xlim( y.min(), y.max() )
@@ -502,7 +507,8 @@ class Corrector( object ):
                 ttl = F'{ title } { str(i+1).zfill(len(str(self.num))) }'
             elif self.num == 1:
                 ttl = title
-            plot2d( img, ttl, self.slit_along, show, save )
+            vmin = np.median( img ) - 3 * np.std( img - np.median( img ), ddof = 1 )
+            plot2d( img, ttl, self.slit_along, vmin, show, save )
 
     def write( self, path, title ):
         '''

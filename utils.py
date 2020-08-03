@@ -150,27 +150,7 @@ def concatenate( specs, idx, mode ):
 
     return spec
 
-# def polyfit( x, b, order ):
-#     '''
-#     '''
-#     import numpy as np
-
-#     X = np.array([ x**(order-i) for i in range( order+1 ) ] ).T
-#     A = np.dot( np.linalg.inv( np.dot( X.T, X ) ), np.dot( X.T, b ) )
-
-#     return A
-
-# def polyval( x, A ):
-#     '''
-#     '''
-#     import numpy as np
-
-#     order = A.shape[0] - 1
-#     X = np.array([ x**(order-i) for i in range( order+1 ) ] ).T
-
-#     return np.dot( X, A )
-
-def plot2d( img, title, slit_along, show = 1, save = 1 ):
+def plot2d( img, title, slit_along, vmin = None, show = 1, save = 1 ):
     '''
     '''
 
@@ -178,7 +158,10 @@ def plot2d( img, title, slit_along, show = 1, save = 1 ):
     fig.subplots_adjust( right = 0.8 )
 
     # Image
-    im = ax.imshow( img, cmap = 'Greys_r', origin = 'lower', extent = ( 0.5, img.shape[1]+0.5, 0.5, img.shape[0]+0.5) )
+    if vmin is None:
+        im = ax.imshow( img, cmap = 'Greys_r', origin = 'lower', extent = ( 0.5, img.shape[1]+0.5, 0.5, img.shape[0]+0.5 ) )
+    else:
+        im = ax.imshow( img, vmin = vmin, cmap = 'Greys_r', origin = 'lower', extent = ( 0.5, img.shape[1]+0.5, 0.5, img.shape[0]+0.5 ) )
     # Colorbar
     cax = fig.add_axes([ ax.get_position().x1 + 0.02, ax.get_position().y0, 0.04, ax.get_position().height ])
     cb = fig.colorbar( im, cax = cax )

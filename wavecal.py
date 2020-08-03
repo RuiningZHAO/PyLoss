@@ -37,7 +37,7 @@ class Ui_MainWindow(object):
         '''
         '''
         self.pix = pix * 1
-        self.cnt = cnt * 1
+        self.cnt = cnt / cnt.max()
         self.inverse = inverse
         
         if self.inverse:
@@ -904,7 +904,7 @@ class Ui_MainWindow(object):
         '''
         '''
         np.savetxt( './wavecal.dat', np.vstack([self.wave_fit, self.cnt]).T, fmt = '%15.8e' )
-        self.statusBar.showMessage( 'Saved to `wavecal.dat` successfully.', 2 )
+        self.statusBar.showMessage( 'Saved to `wavecal.dat` successfully.', 5 )
 
     def _disable_button_seek( self, LineEdit ):
         '''

@@ -26,6 +26,7 @@ except ImportError:
 
 try:
     from astropy.io import fits
+    from astropy.table import Table
     from astropy.stats import sigma_clip
     from astropy.modeling.models import Gaussian2D
     from astropy.stats import gaussian_fwhm_to_sigma
@@ -182,7 +183,8 @@ def extract_oned_spec( path, imgtype, slit_along, method = 'aper', aper_param = 
             fig, ax = plt.subplots( 1, 1, figsize = ( 10, 8 ) )
             fig.subplots_adjust( right = 0.8 )
             # Image
-            im = ax.imshow( img_bgsb, cmap = 'Greys_r', origin = 'lower', extent = ( 0.5, img_bgsb.shape[1]+0.5, 0.5, img_bgsb.shape[0]+0.5) )
+            vmin = -3 * np.std( img_bgsb, ddof = 1 )
+            im = ax.imshow( img_bgsb, vmin = vmin, cmap = 'Greys_r', origin = 'lower', extent = ( 0.5, img_bgsb.shape[1]+0.5, 0.5, img_bgsb.shape[0]+0.5 ) )
             # Background aperture
             ax.plot( x+1, locbgmin+1, 'lightskyblue', ls = '--' ); ax.plot( x+1, locbgmax+1, 'lightskyblue', ls = '--' )
             # Target aperture
@@ -357,7 +359,7 @@ def sens_func( wav, cnt, exp, seeing, sw, airmass, extfile, stdfile, wave_range,
     print( '[Sensitivity function] Extinction correction: Load extinction coefficients' )
     wav_ext, ext = np.loadtxt( extfile ).T
     print( '[Sensitivity function] Extinction correction: Dereddening' )
-    ext = interp1d( wav_ext, ext, kind = 'quadratic' )( wav )
+    ext = interp1d( wav_ext, ext, kind = 'quadratic', bounds_error = False, fill_value = 'extrapolate' )( wav )
     ext_corr_factor = 10**( 0.4 * airmass * ext )
     cnt = cnt * ext_corr_factor
     
@@ -382,15 +384,21 @@ def sens_func( wav, cnt, exp, seeing, sw, airmass, extfile, stdfile, wave_range,
         stdfile = os.path.join( os.getcwd(), stdfile )
     # 1. Load standard spectrum
     print( '[Sensitivity function] Load archived standard spectrum' )
-    stdspec = np.loadtxt( stdfile, skiprows = 1 ).T
-    if stdspec.shape[0] == 3:
-        wav_mag, mag, bp = stdspec
-    elif stdspec.shape[0] == 2:
-        wav_mag, mag = stdspec
-        dwav_mag = np.abs( np.diff( wav_mag ) )
-        dwav_mag = np.hstack([ dwav_mag[0], dwav_mag, dwav_mag[-1] ])
-        bp = ( dwav_mag[:-1] + dwav_mag[1:] ) / 2
-    flx_mod = 10**( -0.4 * mag ) * 3631e-23 * c / wav_mag**2  * 1e8 # [erg/cm2/s/A]
+    if os.path.split( os.path.split( stdfile )[0] )[1] == 'calspec':
+        tab = Table.read( stdfile )
+        wav_mag = tab['WAVELENGTH'].data
+        flx_mod = tab['FLUX'].data
+        bp      = tab['FWHM'].data
+    else:
+        stdspec = np.loadtxt( stdfile, skiprows = 1 ).T
+        if stdspec.shape[0] == 3:
+            wav_mag, mag, bp = stdspec
+        elif stdspec.shape[0] == 2:
+            wav_mag, mag = stdspec
+            dwav_mag = np.abs( np.diff( wav_mag ) )
+            dwav_mag = np.hstack([ dwav_mag[0], dwav_mag, dwav_mag[-1] ])
+            bp = ( dwav_mag[:-1] + dwav_mag[1:] ) / 2
+        flx_mod = 10**( -0.4 * mag ) * 3631e-23 * c / wav_mag**2  * 1e8 # [erg/cm2/s/A]
     # 2. Comparision
     print( '[Sensitivity function] Comparision' )
     flx_obs = np.zeros( flx_mod.shape[0] )
@@ -405,7 +413,7 @@ def sens_func( wav, cnt, exp, seeing, sw, airmass, extfile, stdfile, wave_range,
     wav_sen = wav_mag[~idx]; sen = 2.5 * np.log10( sen[~idx] )
     
     print( '[Sensitivity function] Fitting' )
-    mask = ( wave_range[0] < wav_sen ) & ( wav_sen < wave_range[1] )
+    mask = ~np.isnan( sen ) & ( wave_range[0] < wav_sen ) & ( wav_sen < wave_range[1] )
     for i in range( 5 ):
         knots = np.r_[ ( wav_sen[mask][0], ) * ( order + 1 ), ( wav_sen[mask][-1], ) * ( order + 1 ) ]
         spl = make_lsq_spline( wav_sen[mask], sen[mask], t = knots, k = order )
@@ -466,7 +474,7 @@ def flux_calibration( wav, cnts, cnts_err, sens, exp, airmass, extfile, spectype
 
     print( '[Flux calibration] Extinction correction: Load extinction coefficients' )
     wav_ext, ext = np.loadtxt( extfile ).T
-    ext = interp1d( wav_ext, ext, kind = 'quadratic' )( wav )
+    ext = interp1d( wav_ext, ext, kind = 'quadratic', bounds_error = False, fill_value = 'extrapolate' )( wav )
     ext_corr_factor = 10**( 0.4 * airmass * ext )
     
     # Bandpass
